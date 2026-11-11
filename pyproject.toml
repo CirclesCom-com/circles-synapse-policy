@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "circles-synapse-policy"
-version = "0.1.0"
-description = "Invite rules of Circles (cross-company chats, chat requests) as a Synapse module"
+version = "0.2.0"
+description = "Invite rules of Circles (cross-company chats, chat requests) and read-only organisations as a Synapse module"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
 requires-python = ">=3.10"
