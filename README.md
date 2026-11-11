@@ -9,6 +9,13 @@ Every invite, including those made while creating a room, goes through Synapse's
 the services decide and record first contacts as chat requests. If the services can't be reached,
 the invite is refused.
 
+While an organisation is read-only because its invoice is unpaid, its members can't send messages
+(Circles Admin API 0.5.0). With `sender_check_url` set, Synapse's `check_event_for_spam` callback
+asks the services about the sender of each message (`m.room.message`, `m.room.encrypted`,
+`m.sticker`, `m.reaction`, `m.poll.start`) and refuses it with `M_FORBIDDEN` and
+`"circles_code": "tenant_read_only"`. Answers are kept for a minute per sender. If the services
+can't be reached, messages go through.
+
 ## Configuration (homeserver.yaml)
 
 ```yaml
@@ -16,6 +23,7 @@ modules:
   - module: circles_synapse_policy.CirclesPolicy
     config:
       check_url: http://api:3000/internal/chat/v1/invite-check
+      sender_check_url: http://api:3000/internal/chat/v1/sender-check  # optional
       token: <shared secret, at least 32 characters>
 ```
 
