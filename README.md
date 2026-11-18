@@ -35,4 +35,5 @@ python3 -m unittest discover -s tests -t .
 
 ## Licence
 
-GNU Affero General Public License v3.0 or later.
+Copyright (c) 2026 The Circles authors. GNU Affero General Public License v3.0 or later
+(see `LICENSE` and `NOTICE`).
