@@ -14,6 +14,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # This repository is the published source of the Circles AGPL source offer.
+      - name: No secrets or internal hostnames
+        run: ./scripts/check-public.sh
       - name: Unit tests
         run: python3 -m unittest discover -s tests -t . -v
       - name: Builds as a package
