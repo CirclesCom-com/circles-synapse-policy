@@ -41,13 +41,14 @@ phone's own ring still works.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping, Sequence
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Literal, Optional, Union
 
 logger = logging.getLogger(__name__)
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 #: Event types that count as sending a message.
 MESSAGE_TYPES = frozenset(
@@ -175,6 +176,11 @@ class CirclesPolicy:
             logger.warning("Circles call report failed (%s)", type(e).__name__)
 
 
+def _is_list(value: Any) -> bool:
+    """A JSON array as Synapse hands it to modules (a list, or a tuple in frozen content)."""
+    return isinstance(value, Sequence) and not isinstance(value, (str, bytes))
+
+
 def _alive(entry: dict[str, Any], sent_ts: Any, now_ts: Any) -> bool:
     """Whether a membership hasn't expired: ``expires`` (ms) counts from ``created_ts``, or from
     when the state event was sent. Without ``expires`` it counts as alive."""
@@ -192,18 +198,21 @@ def _alive(entry: dict[str, Any], sent_ts: Any, now_ts: Any) -> bool:
 def _in_call(ev: Any, now_ts: Any) -> bool:
     """Whether a call membership event means "in a call" now: not empty (a leave) and not expired.
 
+    Synapse (1.164 and later) hands modules event content as an immutable mapping (its Rust
+    ``JsonObject``), not a ``dict``; any ``Mapping`` counts.
+
     A member whose app quit without leaving keeps a non-empty membership in the room state until
     it expires; until then it would look like someone already in the call.
     """
     content = ev.content
-    if not isinstance(content, dict) or not content:
+    if not isinstance(content, Mapping) or not content:
         return False
     sent = getattr(ev, "origin_server_ts", None)
     if content.get("application") == "m.call":
         return _alive(content, sent, now_ts)
     memberships = content.get("memberships")  # the older, per-user form
-    return isinstance(memberships, list) and any(
-        isinstance(m, dict) and _alive(m, sent, now_ts) for m in memberships
+    return _is_list(memberships) and any(
+        isinstance(m, Mapping) and _alive(m, sent, now_ts) for m in memberships
     )
 
 
@@ -225,11 +234,11 @@ def call_report(event: Any, state_events: Any) -> dict[str, Any]:
     create = entries.get(("m.room.create", ""))
     if create is not None:
         extra = create.content.get("additional_creators")
-        if isinstance(extra, list) and len(extra) == 1 and isinstance(extra[0], str):
+        if _is_list(extra) and len(extra) == 1 and isinstance(extra[0], str):
             pair = {create.sender, extra[0]}
             if len(pair) == 2 and joined == pair and event.sender in pair:
                 peer = next(u for u in pair if u != event.sender)
-    intent = event.content.get("m.call.intent") if isinstance(event.content, dict) else None
+    intent = event.content.get("m.call.intent") if isinstance(event.content, Mapping) else None
     report: dict[str, Any] = {
         "roomId": event.room_id,
         "userId": event.sender,
