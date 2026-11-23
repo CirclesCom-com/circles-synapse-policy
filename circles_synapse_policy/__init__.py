@@ -47,7 +47,7 @@ from typing import Any, Callable, Literal, Optional, Union
 
 logger = logging.getLogger(__name__)
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 #: Event types that count as sending a message.
 MESSAGE_TYPES = frozenset(
@@ -175,14 +175,36 @@ class CirclesPolicy:
             logger.warning("Circles call report failed (%s)", type(e).__name__)
 
 
-def _in_call(content: Any) -> bool:
-    """Whether a call membership's content means "in a call" (empty content is a leave)."""
+def _alive(entry: dict[str, Any], sent_ts: Any, now_ts: Any) -> bool:
+    """Whether a membership hasn't expired: ``expires`` (ms) counts from ``created_ts``, or from
+    when the state event was sent. Without ``expires`` it counts as alive."""
+    expires = entry.get("expires")
+    if not isinstance(expires, (int, float)) or not isinstance(now_ts, (int, float)):
+        return True
+    start = entry.get("created_ts")
+    if not isinstance(start, (int, float)):
+        start = sent_ts
+    if not isinstance(start, (int, float)):
+        return True
+    return start + expires > now_ts
+
+
+def _in_call(ev: Any, now_ts: Any) -> bool:
+    """Whether a call membership event means "in a call" now: not empty (a leave) and not expired.
+
+    A member whose app quit without leaving keeps a non-empty membership in the room state until
+    it expires; until then it would look like someone already in the call.
+    """
+    content = ev.content
     if not isinstance(content, dict) or not content:
         return False
+    sent = getattr(ev, "origin_server_ts", None)
     if content.get("application") == "m.call":
-        return True
+        return _alive(content, sent, now_ts)
     memberships = content.get("memberships")  # the older, per-user form
-    return isinstance(memberships, list) and len(memberships) > 0
+    return isinstance(memberships, list) and any(
+        isinstance(m, dict) and _alive(m, sent, now_ts) for m in memberships
+    )
 
 
 def call_report(event: Any, state_events: Any) -> dict[str, Any]:
@@ -195,7 +217,7 @@ def call_report(event: Any, state_events: Any) -> dict[str, Any]:
     in_call: set[str] = set()
     joined: set[str] = set()
     for (kind, key), ev in entries.items():
-        if kind in CALL_MEMBER_TYPES and _in_call(ev.content):
+        if kind in CALL_MEMBER_TYPES and _in_call(ev, event.origin_server_ts):
             in_call.add(ev.sender)
         elif kind == "m.room.member" and ev.content.get("membership") == "join":
             joined.add(key)
@@ -216,6 +238,6 @@ def call_report(event: Any, state_events: Any) -> dict[str, Any]:
         "peerInCall": peer is not None and peer in in_call,
         "ts": event.origin_server_ts,
     }
-    if intent in CALL_INTENTS and _in_call(event.content):
+    if intent in CALL_INTENTS and _in_call(event, event.origin_server_ts):
         report["intent"] = intent
     return report

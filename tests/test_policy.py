@@ -204,6 +204,33 @@ class CallReportTest(unittest.TestCase):
         state = room(calls=[(A, "D1")])
         self.assertFalse(call_report(call_event(A, "D1", joined=False), state)["inCall"])
 
+    def test_an_expired_membership_is_not_in_the_call(self):
+        # B's app quit 5 hours ago without leaving: its membership expired after 4 hours.
+        stale = StateEvent(
+            CALL,
+            "_b_P_m.call",
+            B,
+            {**JOINED, "expires": 4 * 3600 * 1000},
+            ts=1700000001000 - 5 * 3600 * 1000,
+        )
+        state = room()
+        state[(CALL, "_b_P_m.call")] = stale
+        self.assertFalse(call_report(call_event(A, "D1"), state)["peerInCall"])
+        fresh = StateEvent(CALL, "_b_P_m.call", B, {**JOINED, "expires": 4 * 3600 * 1000})
+        state[(CALL, "_b_P_m.call")] = fresh
+        self.assertTrue(call_report(call_event(A, "D1"), state)["peerInCall"])
+        # created_ts counts when present; the older per-user form too.
+        made = StateEvent(
+            CALL, "_b_P_m.call", B, {**JOINED, "expires": 1000, "created_ts": 1700000000500}
+        )
+        state[(CALL, "_b_P_m.call")] = made
+        self.assertTrue(call_report(call_event(A, "D1"), state)["peerInCall"])
+        legacy = StateEvent(
+            CALL, B, B, {"memberships": [{"expires": 1000, "created_ts": 1}]}
+        )
+        state[(CALL, "_b_P_m.call")] = legacy
+        self.assertFalse(call_report(call_event(A, "D1"), state)["peerInCall"])
+
     def test_teams_and_other_rooms_have_no_peer(self):
         self.assertIsNone(call_report(call_event(A, "D"), room(additional=()))["peer"])
         self.assertIsNone(
