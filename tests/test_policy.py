@@ -1,7 +1,7 @@
 import asyncio
 import unittest
 
-from circles_synapse_policy import FORBIDDEN, NOT_SPAM, SENDER_TTL, CirclesPolicy
+from circles_synapse_policy import FORBIDDEN, NOT_SPAM, SENDER_TTL, CirclesPolicy, call_report
 
 
 class FakeHttp:
@@ -38,6 +38,39 @@ class FakeApi:
 
     def register_spam_checker_callbacks(self, **callbacks):
         self.callbacks.update(callbacks)
+
+    def register_third_party_rules_callbacks(self, **callbacks):
+        self.callbacks.update(callbacks)
+
+
+class StateEvent:
+    def __init__(self, type, state_key, sender, content, room_id="!room", ts=1700000000000):
+        self.type, self.state_key, self.sender, self.content = type, state_key, sender, content
+        self.room_id, self.origin_server_ts = room_id, ts
+
+
+A, B, C = "@a:circlescom.com", "@b:circlescom.com", "@c:circlescom.com"
+CALL = "org.matrix.msc3401.call.member"
+JOINED = {"application": "m.call", "call_id": "", "scope": "m.room", "device_id": "D"}
+
+
+def room(creator=A, additional=(B,), members=(A, B), calls=()):
+    """A room's state: create event, joined members, and call memberships (sender, device)."""
+    state = {
+        ("m.room.create", ""): StateEvent(
+            "m.room.create", "", creator, {"room_version": "12", "additional_creators": list(additional)}
+        )
+    }
+    for m in members:
+        state[("m.room.member", m)] = StateEvent("m.room.member", m, m, {"membership": "join"})
+    for sender, device in calls:
+        key = f"_{sender}_{device}_m.call"
+        state[(CALL, key)] = StateEvent(CALL, key, sender, JOINED)
+    return state
+
+
+def call_event(sender, device, joined=True, ts=1700000001000):
+    return StateEvent(CALL, f"_{sender}_{device}_m.call", sender, JOINED if joined else {}, ts=ts)
 
 
 RAW = {"check_url": "http://api:3000/internal/chat/v1/invite-check", "token": "x" * 40}
@@ -136,3 +169,76 @@ class PolicyTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+CALL_URL = "http://api:3000/internal/chat/v1/call-member"
+
+
+class CallReportTest(unittest.TestCase):
+    def test_a_caller_joining_a_1on1(self):
+        report = call_report(call_event(A, "D1"), room())
+        self.assertEqual(
+            report,
+            {
+                "roomId": "!room",
+                "userId": A,
+                "inCall": True,
+                "peer": B,
+                "peerInCall": False,
+                "ts": 1700000001000,
+            },
+        )
+
+    def test_passes_on_only_a_known_intent(self):
+        video = StateEvent(CALL, "_a_D_m.call", A, {**JOINED, "m.call.intent": "video"})
+        self.assertEqual(call_report(video, room())["intent"], "video")
+        odd = StateEvent(CALL, "_a_D_m.call", A, {**JOINED, "m.call.intent": "<script>"})
+        self.assertNotIn("intent", call_report(odd, room()))
+        self.assertNotIn("intent", call_report(call_event(A, "D"), room()))
+
+    def test_the_callee_answering_and_the_last_device_leaving(self):
+        state = room(calls=[(A, "D1")])
+        self.assertEqual(call_report(call_event(B, "P"), state)["peerInCall"], True)
+        state = room(calls=[(A, "D1"), (A, "D2")])
+        self.assertTrue(call_report(call_event(A, "D1", joined=False), state)["inCall"])
+        state = room(calls=[(A, "D1")])
+        self.assertFalse(call_report(call_event(A, "D1", joined=False), state)["inCall"])
+
+    def test_teams_and_other_rooms_have_no_peer(self):
+        self.assertIsNone(call_report(call_event(A, "D"), room(additional=()))["peer"])
+        self.assertIsNone(
+            call_report(call_event(A, "D"), room(members=(A, B, C)))["peer"]
+        )
+        self.assertIsNone(call_report(call_event(A, "D"), room(additional=(B, C)))["peer"])
+        self.assertIsNone(call_report(call_event(C, "D"), room(members=(A, C)))["peer"])
+
+    def test_reports_only_call_memberships_and_never_their_content(self):
+        api = FakeApi(FakeHttp(answer={}))
+        policy = CirclesPolicy(
+            CirclesPolicy.parse_config({**RAW, "call_member_url": CALL_URL}), api
+        )
+        self.assertEqual(api.callbacks["on_new_event"], policy.on_new_event)
+        asyncio.run(policy.on_new_event(Event(), room()))
+        asyncio.run(policy.on_new_event(call_event(A, "D1"), room()))
+        self.assertEqual(len(api.http_client.calls), 1)
+        uri, body, headers = api.http_client.calls[0]
+        self.assertEqual(uri, CALL_URL)
+        self.assertEqual(headers, {"Authorization": [f"Bearer {'x' * 40}"]})
+        self.assertNotIn("D1", str(body))
+
+    def test_a_failed_report_is_dropped(self):
+        api = FakeApi(FakeHttp(error=RuntimeError("down")))
+        policy = CirclesPolicy(
+            CirclesPolicy.parse_config({**RAW, "call_member_url": CALL_URL}), api
+        )
+        asyncio.run(policy.on_new_event(call_event(A, "D1"), room()))
+        self.assertEqual(len(api.http_client.calls), 1)
+
+    def test_without_the_url_nothing_is_registered(self):
+        _, api = PolicyTest.make(PolicyTest(), answer={})
+        self.assertNotIn("on_new_event", api.callbacks)
+
+    def test_refuses_a_bad_url(self):
+        with self.assertRaises(ValueError):
+            CirclesPolicy.parse_config({**RAW, "call_member_url": "api:3000"})
+

@@ -16,6 +16,14 @@ asks the services about the sender of each message (`m.room.message`, `m.room.en
 `"circles_code": "tenant_read_only"`. Answers are kept for a minute per sender. If the services
 can't be reached, messages go through.
 
+Calls (Circles Chat API 0.5.0): with `call_member_url` set, Synapse's `on_new_event` callback
+reports each MatrixRTC call membership (`org.matrix.msc3401.call.member`, `m.call.member`) to the
+services: room, user, whether that user and, in a 1on1, the other person are in the call, and the
+time and, for a join, the call's intent (`audio` or `video`, from `m.call.intent`); nothing
+else of the event's content. The services ring the other person or tell them about a missed
+call. A 1on1 is a room whose create event names exactly one additional creator and whose joined
+members are those two people. Reports that fail are dropped.
+
 ## Configuration (homeserver.yaml)
 
 ```yaml
@@ -24,6 +32,7 @@ modules:
     config:
       check_url: http://api:3000/internal/chat/v1/invite-check
       sender_check_url: http://api:3000/internal/chat/v1/sender-check  # optional
+      call_member_url: http://api:3000/internal/chat/v1/call-member  # optional
       token: <shared secret, at least 32 characters>
 ```
 
