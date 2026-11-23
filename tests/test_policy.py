@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+from collections.abc import Mapping
 
 from circles_synapse_policy import FORBIDDEN, NOT_SPAM, SENDER_TTL, CirclesPolicy, call_report
 
@@ -43,9 +44,30 @@ class FakeApi:
         self.callbacks.update(callbacks)
 
 
+class Frozen(Mapping):
+    """Like Synapse's event content since 1.164: an immutable mapping (its Rust JsonObject), not a
+    dict, with JSON arrays as tuples."""
+
+    def __init__(self, content):
+        self._d = {
+            k: Frozen(v) if isinstance(v, dict) else tuple(v) if isinstance(v, list) else v
+            for k, v in content.items()
+        }
+
+    def __getitem__(self, key):
+        return self._d[key]
+
+    def __iter__(self):
+        return iter(self._d)
+
+    def __len__(self):
+        return len(self._d)
+
+
 class StateEvent:
     def __init__(self, type, state_key, sender, content, room_id="!room", ts=1700000000000):
-        self.type, self.state_key, self.sender, self.content = type, state_key, sender, content
+        self.type, self.state_key, self.sender = type, state_key, sender
+        self.content = Frozen(content)
         self.room_id, self.origin_server_ts = room_id, ts
 
 
@@ -188,6 +210,14 @@ class CallReportTest(unittest.TestCase):
                 "ts": 1700000001000,
             },
         )
+
+    def test_reads_synapse_s_immutable_content(self):
+        # Synapse 1.164 hands modules content that is a Mapping, not a dict.
+        event = call_event(A, "D1")
+        self.assertNotIsInstance(event.content, dict)
+        report = call_report(event, room())
+        self.assertTrue(report["inCall"])
+        self.assertEqual(report["peer"], B)
 
     def test_passes_on_only_a_known_intent(self):
         video = StateEvent(CALL, "_a_D_m.call", A, {**JOINED, "m.call.intent": "video"})
