@@ -189,6 +189,13 @@ class CallReportTest(unittest.TestCase):
             },
         )
 
+    def test_passes_on_only_a_known_intent(self):
+        video = StateEvent(CALL, "_a_D_m.call", A, {**JOINED, "m.call.intent": "video"})
+        self.assertEqual(call_report(video, room())["intent"], "video")
+        odd = StateEvent(CALL, "_a_D_m.call", A, {**JOINED, "m.call.intent": "<script>"})
+        self.assertNotIn("intent", call_report(odd, room()))
+        self.assertNotIn("intent", call_report(call_event(A, "D"), room()))
+
     def test_the_callee_answering_and_the_last_device_leaving(self):
         state = room(calls=[(A, "D1")])
         self.assertEqual(call_report(call_event(B, "P"), state)["peerInCall"], True)

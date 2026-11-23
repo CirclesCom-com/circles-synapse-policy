@@ -19,7 +19,8 @@ can't be reached, messages go through.
 Calls (Circles Chat API 0.5.0): with `call_member_url` set, Synapse's `on_new_event` callback
 reports each MatrixRTC call membership (`org.matrix.msc3401.call.member`, `m.call.member`) to the
 services: room, user, whether that user and, in a 1on1, the other person are in the call, and the
-time; never the event's content. The services ring the other person or tell them about a missed
+time and, for a join, the call's intent (`audio` or `video`, from `m.call.intent`); nothing
+else of the event's content. The services ring the other person or tell them about a missed
 call. A 1on1 is a room whose create event names exactly one additional creator and whose joined
 members are those two people. Reports that fail are dropped.
 

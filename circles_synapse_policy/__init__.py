@@ -31,7 +31,8 @@ open): a few extra messages from an unpaid organisation do less harm than stoppi
 Calls (Circles Chat API 0.5.0): call memberships are unencrypted MatrixRTC state events. After
 one is stored, Synapse's ``on_new_event`` callback reports it to the services
 (``call_member_url``): room, user, whether that user and, in a 1on1, the other person are in the
-call, and the time; never the event's content. The services then ring the other person or tell
+call, the time and, for a join, the call's intent (``audio`` or ``video``, from ``m.call.intent``);
+nothing else of the event's content. The services then ring the other person or tell
 them about a missed call. A 1on1 is a room whose create event names exactly one additional
 creator and whose joined members are those two people. Reports that fail are dropped: the
 phone's own ring still works.
@@ -56,6 +57,8 @@ MESSAGE_TYPES = frozenset(
 SENDER_TTL = 60.0
 #: MatrixRTC call membership state events (MSC3401/MSC4143 and the stable name).
 CALL_MEMBER_TYPES = frozenset({"org.matrix.msc3401.call.member", "m.call.member"})
+#: The only values of ``m.call.intent`` that are passed on.
+CALL_INTENTS = frozenset({"audio", "video"})
 
 NOT_SPAM: Literal["NOT_SPAM"] = "NOT_SPAM"
 
@@ -204,7 +207,8 @@ def call_report(event: Any, state_events: Any) -> dict[str, Any]:
             pair = {create.sender, extra[0]}
             if len(pair) == 2 and joined == pair and event.sender in pair:
                 peer = next(u for u in pair if u != event.sender)
-    return {
+    intent = event.content.get("m.call.intent") if isinstance(event.content, dict) else None
+    report: dict[str, Any] = {
         "roomId": event.room_id,
         "userId": event.sender,
         "inCall": event.sender in in_call,
@@ -212,3 +216,6 @@ def call_report(event: Any, state_events: Any) -> dict[str, Any]:
         "peerInCall": peer is not None and peer in in_call,
         "ts": event.origin_server_ts,
     }
+    if intent in CALL_INTENTS and _in_call(event.content):
+        report["intent"] = intent
+    return report
